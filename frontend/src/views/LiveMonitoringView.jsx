@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Video, Camera, Play, Square, RefreshCw, Crosshair, Download, Cpu, Layers } from 'lucide-react';
-import { api } from '../services/api';
+import { api, BASE_URL } from '../services/api';
 
 export default function LiveMonitoringView({ systemStatus, onRefresh }) {
   const [liveDetections, setLiveDetections] = useState([]);
@@ -80,7 +80,7 @@ export default function LiveMonitoringView({ systemStatus, onRefresh }) {
           )}
 
           <a
-            href="/api/camera/frame"
+            href={`${BASE_URL}/api/camera/frame`}
             download="safact_capture.jpg"
             target="_blank"
             rel="noreferrer"
@@ -100,11 +100,12 @@ export default function LiveMonitoringView({ systemStatus, onRefresh }) {
             {isCameraActive ? (
               <img
                 key={streamKey}
-                src={`/stream/video?t=${streamKey}`}
+                src={`${BASE_URL}/stream/video?t=${streamKey}`}
                 alt="Optical Video Feed"
                 className="w-full h-full object-contain"
               />
             ) : (
+
               <div className="text-center p-8 text-slate-500">
                 <Camera className="w-10 h-10 mx-auto mb-2 opacity-40" />
                 <p className="text-xs">Stream Paused. Click Start Stream to resume.</p>

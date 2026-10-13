@@ -3,23 +3,44 @@
  * Robust asynchronous communication layer with error resilience.
  */
 
-const BASE_URL = ''; // Relative URL leverages Vite reverse proxy
+const envBaseUrl = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL;
+export const BASE_URL = (
+  envBaseUrl !== undefined && envBaseUrl !== ''
+    ? envBaseUrl
+    : (import.meta.env.PROD ? 'https://safact.onrender.com' : '')
+).replace(/\/+$/, '');
 
 async function request(endpoint, options = {}) {
+  const timeoutMs = options.timeout || 12000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${BASE_URL}${cleanEndpoint}`;
+
   try {
-    const res = await fetch(`${BASE_URL}${endpoint}`, {
+    const res = await fetch(url, {
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         ...options.headers,
       },
       ...options,
     });
+    clearTimeout(timeoutId);
+
+
     if (!res.ok) {
       throw new Error(`HTTP error ${res.status} on ${endpoint}`);
     }
     return await res.json();
   } catch (err) {
-    console.warn(`[SaFact API] Error requesting ${endpoint}:`, err.message);
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      console.warn(`[SaFact API] Request timed out on ${endpoint}`);
+    } else {
+      console.warn(`[SaFact API] Error requesting ${endpoint}:`, err.message);
+    }
     throw err;
   }
 }
@@ -32,7 +53,13 @@ export const api = {
   getSystemStatus: () => request('/api/system/status'),
   getHealth: () => request('/api/system/health'),
 
-  // Camera Operations
+  // Camera Operations & Frame Ingestion
+  processFrame: (base64Image) =>
+    request('/api/camera/process-frame', {
+      method: 'POST',
+      body: JSON.stringify({ image: base64Image }),
+      timeout: 8000,
+    }),
   getCameraStatus: () => request('/api/camera/status'),
   startCamera: () => request('/api/camera/start', { method: 'POST' }),
   stopCamera: () => request('/api/camera/stop', { method: 'POST' }),
@@ -41,6 +68,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ source }),
     }),
+
 
   // Detections & Spatial Zones
   getLiveDetections: () => request('/api/detections/live'),

@@ -16,10 +16,11 @@ from services.recommendation_service import recommendation_service
 
 class CameraService:
     def __init__(self):
-        self.camera_source = str(settings.DEFAULT_CAMERA_INDEX)
+        self.camera_source = "INTERNAL WEBCAM"
         self.cap = None
         self.is_running = False
         self.camera_connected = False
+        self.has_processed_frame = False
         self.thread = None
         self.lock = threading.Lock()
         
@@ -30,6 +31,7 @@ class CameraService:
         self.current_raw_frame = None
         self.current_annotated_frame = None
         self.last_frame_time = time.time()
+        self._last_browser_frame_time = 0.0
         
         # Telemetry metrics
         self.frame_count = 0
@@ -47,37 +49,45 @@ class CameraService:
             self.latest_risk_assessment, self.latest_zone_metrics
         )
 
-        # Start camera capture by default
-        self.start()
+        # Do NOT start cv2.VideoCapture(0) automatically.
+        # Browser client streams frames directly to the backend.
 
     def start(self, source: Optional[str] = None):
         with self.lock:
-            if self.is_running:
-                return
-
             if source is not None:
                 self.camera_source = source
 
             self.is_running = True
             self.error_message = None
-            self.thread = threading.Thread(target=self._capture_loop, daemon=True)
-            self.thread.start()
+
+            # If source is internal browser webcam, do not start server cv2.VideoCapture thread
+            if str(self.camera_source).strip() in ["0", "1", "INTERNAL WEBCAM", "BROWSER WEBCAM"]:
+                self.camera_source = "INTERNAL WEBCAM"
+                return
+
+            # External RTSP stream or custom video file
+            if not self.thread or not self.thread.is_alive():
+                self.thread = threading.Thread(target=self._capture_loop, daemon=True)
+                self.thread.start()
 
     def stop(self):
         with self.lock:
             self.is_running = False
+            self.camera_connected = False
+            self.has_processed_frame = False
+            self._last_browser_frame_time = 0.0
             if self.cap is not None:
                 try:
                     self.cap.release()
                 except Exception:
                     pass
                 self.cap = None
-            self.camera_connected = False
 
     def restart(self, new_source: str):
         self.stop()
-        time.sleep(0.5)
+        time.sleep(0.3)
         self.start(new_source)
+
 
     def _init_capture(self) -> bool:
         try:
@@ -259,29 +269,95 @@ class CameraService:
                 pass
             self.cap = None
 
+    def process_browser_frame(self, frame: np.ndarray) -> Dict[str, Any]:
+        """
+        Processes a single video frame sent from the user's browser webcam.
+        Executes YOLOv8n detection, evaluates spatial zones, updates crowd risk,
+        and refreshes the real-time telemetry cache.
+        """
+        now = time.time()
+        with self.lock:
+            # Measure actual processing/upload FPS
+            if self._last_browser_frame_time > 0:
+                dt = now - self._last_browser_frame_time
+                if dt > 0:
+                    current_fps = round(1.0 / dt, 1)
+                    self.fps = round(0.7 * self.fps + 0.3 * current_fps, 1) if self.fps > 0 else current_fps
+            self._last_browser_frame_time = now
+            self.last_frame_time = now
+            self.camera_connected = True
+            self.is_running = True
+            self.camera_source = "INTERNAL WEBCAM"
+            self.frame_count += 1
+
+        # Run YOLOv8 person detection pipeline
+        detections, inf_time = self.detector.detect(frame)
+        detections = zone_service.assign_zones(detections)
+        zone_metrics = zone_service.evaluate_zones(detections)
+        risk_eval = risk_engine.evaluate(len(detections), zone_metrics)
+        recs = recommendation_service.generate_recommendations(risk_eval, zone_metrics)
+
+        # Draw defense HUD on frame
+        annotated = self._draw_hud(frame, detections, inf_time)
+
+        with self.lock:
+            self.has_processed_frame = True
+            self.latest_detections = detections
+            self.latest_person_count = len(detections)
+            self.latest_zone_metrics = zone_metrics
+            self.latest_risk_assessment = risk_eval
+            self.latest_recommendations = recs
+            self.inference_time_ms = inf_time
+            self.current_raw_frame = frame
+            self.current_annotated_frame = annotated
+
+        avg_conf = 0.0
+        if detections:
+            avg_conf = round(sum(d["confidence"] for d in detections) / len(detections), 3)
+
+        return {
+            "timestamp": now,
+            "has_processed_frame": True,
+            "camera_connected": True,
+            "person_count": len(detections),
+            "confidence_avg": avg_conf,
+            "inference_time_ms": inf_time,
+            "fps": self.fps,
+            "detections": detections,
+            "zones": zone_metrics,
+            "risk": risk_eval,
+            "recommendations": recs
+        }
+
     def get_annotated_frame_jpeg(self) -> bytes:
         with self.lock:
             frame = self.current_annotated_frame
         
         if frame is None:
-            frame = self._create_standby_frame("INITIALIZING...")
+            frame = self._create_standby_frame("OPTICAL SENSOR STANDBY - INITIALIZE FROM BROWSER")
 
         ret, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
         return buffer.tobytes() if ret else b""
 
     def get_latest_stats(self) -> Dict[str, Any]:
         with self.lock:
+            # If internal webcam stream stopped receiving frames for > 8s, mark disconnected
+            if self.camera_connected and (time.time() - self.last_frame_time > 8.0):
+                self.camera_connected = False
+
             return {
+                "has_processed_frame": self.has_processed_frame,
                 "camera_connected": self.camera_connected,
                 "camera_source": self.camera_source,
-                "fps": self.fps,
-                "person_count": self.latest_person_count,
-                "inference_time_ms": self.inference_time_ms,
-                "detections": self.latest_detections,
-                "zones": self.latest_zone_metrics,
-                "risk": self.latest_risk_assessment,
-                "recommendations": self.latest_recommendations,
+                "fps": self.fps if self.camera_connected else 0.0,
+                "person_count": self.latest_person_count if self.has_processed_frame else None,
+                "inference_time_ms": self.inference_time_ms if self.has_processed_frame else 0.0,
+                "detections": self.latest_detections if self.has_processed_frame else [],
+                "zones": self.latest_zone_metrics if self.has_processed_frame else [],
+                "risk": self.latest_risk_assessment if self.has_processed_frame else None,
+                "recommendations": self.latest_recommendations if self.has_processed_frame else [],
                 "error_message": self.error_message
             }
 
 camera_service = CameraService()
+

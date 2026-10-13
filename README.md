@@ -1,7 +1,7 @@
-<<<<<<< HEAD
 # 🛡️ SaFact — Smart AI for Crowd Flow and Threat Detection
 
 > *Real-time crowd intelligence, optical YOLO person detection, bottleneck mitigation, and autonomous pedestrian flow guidance.*
+
 
 ---
 
@@ -134,6 +134,16 @@ SaFact/
   - **LOS E (1.8 – 2.5 p/m²)**: Severe bottleneck, crowd balancing required.
   - **LOS F (> 2.5 p/m²)**: Compression and stampede hazard, urgent intervention.
 - **Privacy Assurance**: Processed locally on-device. Identifiable facial data is never retained or stored to disk.
-=======
-# SaFact
->>>>>>> 3031b33bf4354883255f666ecd53a457e9194b7f
+
+---
+
+## 📹 Live Camera Architecture & Ingestion Pipeline
+
+To support deployment on headless cloud infrastructure (Render) without attempting server-side hardware access (`cv2.VideoCapture(0)`):
+
+1. **Client-Side Video Stream**: The user's browser requests webcam access on-demand using `navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 } }, audio: false })` when clicking **Initialize Camera Stream**.
+2. **Lightweight Frame Transmission**: An offscreen canvas captures frames scaled to max 640×480 with JPEG quality 0.65 (~30 KB payload) and transmits them at ~1.5 FPS to `POST /api/camera/process-frame`.
+3. **YOLOv8n Inference & Telemetry**: FastAPI ingests the frame, executes the Ultralytics YOLOv8 detector, assigns spatial sectors (Zones A–D), computes Fruin LOS density, and generates real-time autonomous safety guidance.
+4. **Zero-Lag Tactical HUD**: The browser overlays an HTML5 canvas directly over the live `<video>` preview, drawing bounding boxes, confidence badges, centroids, and sector lines in real-time.
+5. **Safe Hardware Lifecycle**: When clicking **Stop Feed** or exiting the page, all `MediaStreamTrack` hardware locks are released.
+

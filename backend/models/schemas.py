@@ -100,3 +100,7 @@ class SettingsUpdateRequest(BaseModel):
     inference_interval: Optional[int] = None
     monitored_area_sqm: Optional[float] = None
     max_capacity: Optional[int] = None
+
+class ProcessFrameRequest(BaseModel):
+    image: str = Field(..., description="Base64 encoded JPEG/PNG frame from browser webcam")
+

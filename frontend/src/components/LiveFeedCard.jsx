@@ -1,47 +1,306 @@
-import React, { useState } from 'react';
-import { Camera, Play, Square, Maximize2, RefreshCw, AlertCircle, Eye, Settings } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Camera, Play, Square, RefreshCw, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
 
+
 export default function LiveFeedCard({ cameraStatus, onCameraStatusChange }) {
-  const [streamKey, setStreamKey] = useState(Date.now());
-  const [isActionLoading, setIsActionLoading] = useState(false);
-  const [imgError, setImgError] = useState(false);
-  const [showOverlay, setShowOverlay] = useState(true);
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorType, setErrorType] = useState(null); // 'PERMISSION_DENIED' | 'NOT_FOUND' | 'NOT_SUPPORTED' | 'GENERIC'
+  const [errorMessage, setErrorMessage] = useState('');
+  const [telemetry, setTelemetry] = useState(null);
 
-  const isConnected = cameraStatus?.connected ?? false;
-  const isRunning = cameraStatus?.is_running ?? true;
-  const currentSource = cameraStatus?.source ?? '0';
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const loopIntervalRef = useRef(null);
+  const isUploadingRef = useRef(false);
+  const offscreenCanvasRef = useRef(null);
 
-  const handleStart = async () => {
-    setIsActionLoading(true);
+  // Stop camera stream & release hardware tracks
+  const stopFeed = useCallback(async () => {
+    setIsLoading(true);
     try {
-      await api.startCamera();
-      setImgError(false);
-      setStreamKey(Date.now());
+      if (loopIntervalRef.current) {
+        clearInterval(loopIntervalRef.current);
+        loopIntervalRef.current = null;
+      }
+
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => {
+          try {
+            track.stop();
+          } catch (e) {
+            // Silently ignore track stop error
+          }
+        });
+        streamRef.current = null;
+      }
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+
+      if (canvasRef.current) {
+        const ctx = canvasRef.current.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
+
+      setIsStreaming(false);
+      setTelemetry(null);
+      await api.stopCamera().catch(() => {});
       if (onCameraStatusChange) onCameraStatusChange();
-    } catch (e) {
-      console.error(e);
     } finally {
-      setIsActionLoading(false);
+      setIsLoading(false);
+    }
+  }, [onCameraStatusChange]);
+
+  // Draw YOLO bounding boxes, centroids, and tactical HUD on canvas overlay
+  const drawDetections = useCallback((detections, videoEl) => {
+    const canvas = canvasRef.current;
+    if (!canvas || !videoEl) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const vw = videoEl.videoWidth || 640;
+    const vh = videoEl.videoHeight || 480;
+
+    if (canvas.width !== vw || canvas.height !== vh) {
+      canvas.width = vw;
+      canvas.height = vh;
+    }
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!detections || detections.length === 0) return;
+
+    detections.forEach((det) => {
+      const { x1, y1, x2, y2, confidence, centroid_x, centroid_y, zone_id } = det;
+      const width = x2 - x1;
+      const height = y2 - y1;
+
+      // Color scheme based on confidence
+      const strokeColor = confidence > 0.6 ? '#06b6d4' : '#f59e0b';
+      const cornerLen = Math.min(18, Math.max(8, width * 0.2));
+
+      // Bounding box border
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x1, y1, width, height);
+
+      // Tactical corner accents
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 3;
+      // Top-Left
+      ctx.beginPath();
+      ctx.moveTo(x1, y1 + cornerLen);
+      ctx.lineTo(x1, y1);
+      ctx.lineTo(x1 + cornerLen, y1);
+      ctx.stroke();
+      // Top-Right
+      ctx.beginPath();
+      ctx.moveTo(x2 - cornerLen, y1);
+      ctx.lineTo(x2, y1);
+      ctx.lineTo(x2, y1 + cornerLen);
+      ctx.stroke();
+      // Bottom-Left
+      ctx.beginPath();
+      ctx.moveTo(x1, y2 - cornerLen);
+      ctx.lineTo(x1, y2);
+      ctx.lineTo(x1 + cornerLen, y2);
+      ctx.stroke();
+      // Bottom-Right
+      ctx.beginPath();
+      ctx.moveTo(x2 - cornerLen, y2);
+      ctx.lineTo(x2, y2);
+      ctx.lineTo(x2, y2 - cornerLen);
+      ctx.stroke();
+
+      // Centroid point
+      if (centroid_x !== undefined && centroid_y !== undefined) {
+        ctx.fillStyle = '#f43f5e';
+        ctx.beginPath();
+        ctx.arc(centroid_x, centroid_y, 3.5, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+
+      // Detection badge label
+      const confPct = Math.round((confidence || 0) * 100);
+      const labelText = `PERSON ${confPct}% [${zone_id || 'SECTOR'}]`;
+      ctx.font = 'bold 11px monospace';
+      const textMetrics = ctx.measureText(labelText);
+      const bgWidth = textMetrics.width + 10;
+      const bgHeight = 18;
+      const labelY = Math.max(y1 - bgHeight, 0);
+
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+      ctx.fillRect(x1, labelY, bgWidth, bgHeight);
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x1, labelY, bgWidth, bgHeight);
+
+      ctx.fillStyle = '#f8fafc';
+      ctx.fillText(labelText, x1 + 5, labelY + 13);
+    });
+  }, []);
+
+  // Frame capture and backend YOLOv8n ingestion loop
+  const processFrame = useCallback(async () => {
+    if (!videoRef.current || !streamRef.current || isUploadingRef.current) return;
+
+    const video = videoRef.current;
+    if (video.readyState < 2 || video.videoWidth === 0) return;
+
+    try {
+      isUploadingRef.current = true;
+
+      // Resized frame capture using offscreen canvas to minimize network payload & server RAM
+      if (!offscreenCanvasRef.current) {
+        offscreenCanvasRef.current = document.createElement('canvas');
+      }
+      const offscreen = offscreenCanvasRef.current;
+
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+      // Scale down to max 640x480 for lightweight transmission & fast YOLO processing
+      const maxDim = 640;
+      const scale = Math.min(1, maxDim / Math.max(vw, vh));
+      const targetW = Math.round(vw * scale);
+      const targetH = Math.round(vh * scale);
+
+      offscreen.width = targetW;
+      offscreen.height = targetH;
+      const offCtx = offscreen.getContext('2d');
+      offCtx.drawImage(video, 0, 0, targetW, targetH);
+
+      // Lightweight JPEG encoding at 0.65 quality
+      const base64Image = offscreen.toDataURL('image/jpeg', 0.65);
+
+      // Post frame to FastAPI backend
+      const res = await api.processFrame(base64Image);
+
+      if (res) {
+        // Adjust detection coordinates back to original video dimensions if scaled
+        const scaleFactorX = vw / targetW;
+        const scaleFactorY = vh / targetH;
+        const scaledDetections = (res.detections || []).map((d) => ({
+          ...d,
+          x1: d.x1 * scaleFactorX,
+          y1: d.y1 * scaleFactorY,
+          x2: d.x2 * scaleFactorX,
+          y2: d.y2 * scaleFactorY,
+          centroid_x: d.centroid_x * scaleFactorX,
+          centroid_y: d.centroid_y * scaleFactorY,
+        }));
+
+        setTelemetry({
+          person_count: res.person_count,
+          inference_time_ms: res.inference_time_ms,
+          fps: res.fps || 1.5,
+          confidence_avg: res.confidence_avg,
+          detections: scaledDetections,
+        });
+
+        // Draw bounding boxes on canvas overlay
+        drawDetections(scaledDetections, video);
+
+        // Notify parent dashboard to update metrics
+        if (onCameraStatusChange) {
+          onCameraStatusChange();
+        }
+      }
+    } catch (err) {
+      // Gracefully handle temporary network/Render delays without interrupting user preview
+      console.warn('[SaFact Camera Feed] Frame processing latency or timeout:', err.message);
+    } finally {
+      isUploadingRef.current = false;
+    }
+  }, [drawDetections, onCameraStatusChange]);
+
+  // Request user camera permission and start streaming
+  const startFeed = async () => {
+    setIsLoading(true);
+    setErrorType(null);
+    setErrorMessage('');
+
+    // Verify browser support for getUserMedia
+    if (!navigator?.mediaDevices?.getUserMedia) {
+      setErrorType('NOT_SUPPORTED');
+      setErrorMessage(
+        'Browser camera access (getUserMedia) is unsupported or restricted in insecure HTTP contexts. Please access via HTTPS or localhost.'
+      );
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const constraints = {
+        video: {
+          width: { ideal: 640 },
+          height: { ideal: 480 },
+          facingMode: 'user',
+        },
+        audio: false,
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current.play().catch((err) => {
+            console.warn('[SaFact Camera] Video play promise rejected:', err);
+          });
+        };
+      }
+
+      setIsStreaming(true);
+      await api.startCamera().catch(() => {});
+
+      // Launch continuous frame upload loop (~1.5 FPS = 650ms to respect Render 512MB RAM & CPU)
+      if (loopIntervalRef.current) clearInterval(loopIntervalRef.current);
+      loopIntervalRef.current = setInterval(processFrame, 650);
+
+      if (onCameraStatusChange) onCameraStatusChange();
+    } catch (err) {
+      console.error('[SaFact Camera Permission Error]', err);
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        setErrorType('PERMISSION_DENIED');
+        setErrorMessage(
+          'Webcam permission was denied. Please allow camera permissions in your browser URL bar or settings, then click Initialize Camera Stream.'
+        );
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        setErrorType('NOT_FOUND');
+        setErrorMessage('No camera device found on this system. Please connect an integrated or external webcam.');
+      } else {
+        setErrorType('GENERIC');
+        setErrorMessage(err.message || 'Unable to open camera stream. Ensure no other application is using it.');
+      }
+      setIsStreaming(false);
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  const handleStop = async () => {
-    setIsActionLoading(true);
-    try {
-      await api.stopCamera();
-      if (onCameraStatusChange) onCameraStatusChange();
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsActionLoading(false);
-    }
-  };
+  // Clean up media tracks and loop on unmount or tab close
+  useEffect(() => {
+    const handleUnload = () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+    window.addEventListener('beforeunload', handleUnload);
 
-  const handleRetry = () => {
-    setImgError(false);
-    setStreamKey(Date.now());
-  };
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      if (loopIntervalRef.current) clearInterval(loopIntervalRef.current);
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg flex flex-col">
@@ -55,7 +314,7 @@ export default function LiveFeedCard({ cameraStatus, onCameraStatusChange }) {
             <h3 className="text-sm font-bold text-white m-0 flex items-center gap-2">
               Optical Sensor Stream
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-normal">
-                SRC: {currentSource === '0' ? 'INTERNAL WEBCAM' : currentSource}
+                SRC: INTERNAL WEBCAM
               </span>
             </h3>
           </div>
@@ -63,10 +322,10 @@ export default function LiveFeedCard({ cameraStatus, onCameraStatusChange }) {
 
         {/* Live Controls */}
         <div className="flex items-center gap-2">
-          {isRunning ? (
+          {isStreaming ? (
             <button
-              onClick={handleStop}
-              disabled={isActionLoading}
+              onClick={stopFeed}
+              disabled={isLoading}
               className="px-2.5 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-900 text-rose-300 border border-rose-800 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
             >
               <Square className="w-3.5 h-3.5 fill-rose-300" />
@@ -74,8 +333,8 @@ export default function LiveFeedCard({ cameraStatus, onCameraStatusChange }) {
             </button>
           ) : (
             <button
-              onClick={handleStart}
-              disabled={isActionLoading}
+              onClick={startFeed}
+              disabled={isLoading}
               className="px-2.5 py-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900 text-emerald-300 border border-emerald-800 text-xs font-semibold flex items-center gap-1.5 transition-colors disabled:opacity-50"
             >
               <Play className="w-3.5 h-3.5 fill-emerald-300" />
@@ -84,60 +343,96 @@ export default function LiveFeedCard({ cameraStatus, onCameraStatusChange }) {
           )}
 
           <button
-            onClick={handleRetry}
-            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
-            title="Reload Video Stream"
+            onClick={isStreaming ? processFrame : startFeed}
+            disabled={isLoading}
+            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors disabled:opacity-50"
+            title="Refresh Ingestion Frame"
           >
-            <RefreshCw className="w-3.5 h-3.5" />
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
         </div>
       </div>
 
       {/* Main Video Viewport Canvas */}
       <div className="relative bg-slate-950 aspect-video w-full flex items-center justify-center overflow-hidden">
-        {isRunning && !imgError ? (
-          <img
-            key={streamKey}
-            src={`/stream/video?t=${streamKey}`}
-            alt="Real-time SaFact Optical Stream"
-            className="w-full h-full object-contain"
-            onError={() => setImgError(true)}
-          />
-        ) : (
-          <div className="flex flex-col items-center justify-center text-center p-6 space-y-3">
-            <div className="w-12 h-12 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500">
-              <Camera className="w-6 h-6" />
+        {/* Local Webcam Video Player */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className={`w-full h-full object-contain ${isStreaming ? 'block' : 'hidden'}`}
+        />
+
+        {/* Overlaid Detection Canvas for YOLO Bounding Boxes */}
+        <canvas
+          ref={canvasRef}
+          className={`absolute inset-0 w-full h-full object-contain pointer-events-none ${
+            isStreaming ? 'block' : 'hidden'
+          }`}
+        />
+
+        {/* Offline / Standby / Error Card */}
+        {!isStreaming && (
+          <div className="flex flex-col items-center justify-center text-center p-6 space-y-3 max-w-md">
+            <div
+              className={`w-12 h-12 rounded-full border flex items-center justify-center ${
+                errorType
+                  ? 'bg-rose-950/40 border-rose-800 text-rose-400'
+                  : 'bg-slate-900 border-slate-800 text-slate-500'
+              }`}
+            >
+              {errorType ? <AlertCircle className="w-6 h-6" /> : <Camera className="w-6 h-6" />}
             </div>
+
             <div>
-              <h4 className="text-sm font-semibold text-slate-300 m-0">
-                {!isRunning ? 'Camera Feed Paused' : 'Camera Stream Unavailable'}
+              <h4 className="text-sm font-semibold text-slate-200 m-0">
+                {errorType === 'PERMISSION_DENIED'
+                  ? 'Camera Permission Denied'
+                  : errorType === 'NOT_FOUND'
+                  ? 'No Camera Device Detected'
+                  : errorType === 'NOT_SUPPORTED'
+                  ? 'Camera API Not Supported'
+                  : errorType
+                  ? 'Webcam Connection Error'
+                  : 'CAM OFFLINE / STANDBY'}
               </h4>
-              <p className="text-xs text-slate-400 mt-1 max-w-sm">
-                {!isRunning
-                  ? 'Click "Start Feed" above to resume real-time CCTV capture.'
-                  : 'Unable to connect to laptop webcam. Ensure permissions are granted or reconnect camera.'}
+              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                {errorMessage ||
+                  'Your laptop webcam will be accessed directly inside this browser. Click "Initialize Camera Stream" below to grant permission and run YOLOv8n detections.'}
               </p>
             </div>
+
             <button
-              onClick={handleStart}
-              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-2 shadow-md transition-all"
+              onClick={startFeed}
+              disabled={isLoading}
+              className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold flex items-center gap-2 shadow-md transition-all disabled:opacity-50"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Initialize Camera Stream
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+              {isLoading ? 'Requesting Camera...' : 'Initialize Camera Stream'}
             </button>
           </div>
         )}
 
         {/* Tactical HUD Corner Elements */}
-        {isRunning && !imgError && (
+        {isStreaming && (
           <>
             <div className="absolute top-3 left-3 flex items-center gap-2 bg-slate-950/80 backdrop-blur-sm border border-slate-800 px-2.5 py-1 rounded-md text-[11px] font-mono text-slate-300">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-ping" />
               <span>LIVE SENSOR</span>
             </div>
 
+            <div className="absolute top-3 right-3 flex items-center gap-2 bg-slate-950/80 backdrop-blur-sm border border-slate-800 px-2.5 py-1 rounded-md text-[11px] font-mono text-cyan-400">
+              <span>
+                YOLOv8n:{' '}
+                {telemetry?.person_count !== undefined
+                  ? `${telemetry.person_count} DETECTED`
+                  : 'SCANNING...'}
+              </span>
+            </div>
+
             <div className="absolute bottom-3 left-3 bg-slate-950/80 backdrop-blur-sm border border-slate-800 px-2.5 py-1 rounded-md text-[10px] font-mono text-cyan-400">
-              CHANNEL: CAM-01 [NORTH_GATE] • RESOLUTION: 640×480
+              CHANNEL: CAM-01 [INTERNAL WEBCAM] • RESOLUTION: 640×480
             </div>
           </>
         )}
@@ -146,8 +441,22 @@ export default function LiveFeedCard({ cameraStatus, onCameraStatusChange }) {
       {/* Video Footer Telemetry */}
       <div className="px-4 py-2.5 bg-slate-900 border-t border-slate-800 flex items-center justify-between text-xs text-slate-400">
         <div className="flex items-center gap-4 font-mono">
-          <span>FPS: <strong className="text-slate-200">{cameraStatus?.fps || 0}</strong></span>
-          <span>LATENCY: <strong className="text-cyan-400">LOW (&lt;50ms)</strong></span>
+          <span>
+            FPS:{' '}
+            <strong className="text-slate-200">
+              {isStreaming ? telemetry?.fps || cameraStatus?.fps || 1.5 : 0}
+            </strong>
+          </span>
+          <span>
+            LATENCY:{' '}
+            <strong className="text-cyan-400">
+              {isStreaming
+                ? telemetry?.inference_time_ms
+                  ? `${Math.round(telemetry.inference_time_ms)}ms`
+                  : 'LOW (<80ms)'
+                : 'OFFLINE'}
+            </strong>
+          </span>
         </div>
         <div className="text-[11px] text-slate-400">
           Target Mode: Automated Crowd Bounding Box & Centroid Tracking

@@ -2,6 +2,7 @@ import React from 'react';
 import { Users, Gauge, ShieldAlert, BarChart3, Activity } from 'lucide-react';
 
 export default function MetricsRow({ dashboardData }) {
+  const isAvailable = Boolean(dashboardData?.has_processed_frame && dashboardData?.person_count !== null && dashboardData?.person_count !== undefined);
   const personCount = dashboardData?.person_count ?? 0;
   const risk = dashboardData?.risk || {};
   const riskScore = risk?.risk_score ?? 0;
@@ -27,43 +28,55 @@ export default function MetricsRow({ dashboardData }) {
   const cards = [
     {
       title: 'Current Headcount',
-      value: personCount,
-      unit: 'people',
-      subtitle: 'Real-time AI detection',
+      value: isAvailable ? personCount : 'Waiting for detection',
+      unit: isAvailable ? 'people' : '',
+      subtitle: isAvailable ? 'Real-time AI detection' : 'Activate webcam feed',
       icon: Users,
       color: 'text-cyan-400',
-      badge: 'LIVE SENSOR',
-      badgeClass: 'bg-cyan-950 text-cyan-400 border-cyan-800/60',
+      badge: isAvailable ? 'LIVE SENSOR' : 'CAM OFFLINE',
+      badgeClass: isAvailable ? 'bg-cyan-950 text-cyan-400 border-cyan-800/60' : 'bg-slate-800 text-slate-400 border-slate-700',
+      isText: !isAvailable,
     },
     {
       title: 'Pedestrian Density',
-      value: `${density}`,
-      unit: 'p/m²',
-      subtitle: density > 2.5 ? 'Severe bottleneck' : density > 1.5 ? 'Restricted flow' : 'Free nominal flow',
+      value: isAvailable ? `${density}` : 'Waiting for detection',
+      unit: isAvailable ? 'p/m²' : '',
+      subtitle: isAvailable
+        ? (density > 2.5 ? 'Severe bottleneck' : density > 1.5 ? 'Restricted flow' : 'Free nominal flow')
+        : 'Awaiting sensor data',
       icon: Gauge,
       color: 'text-blue-400',
-      badge: density > 2.5 ? 'LOS E-F' : density > 1.5 ? 'LOS C-D' : 'LOS A-B',
-      badgeClass: density > 2.5 ? 'bg-rose-950 text-rose-400 border-rose-800' : 'bg-blue-950 text-blue-400 border-blue-800',
+      badge: isAvailable
+        ? (density > 2.5 ? 'LOS E-F' : density > 1.5 ? 'LOS C-D' : 'LOS A-B')
+        : 'STANDBY',
+      badgeClass: isAvailable
+        ? (density > 2.5 ? 'bg-rose-950 text-rose-400 border-rose-800' : 'bg-blue-950 text-blue-400 border-blue-800')
+        : 'bg-slate-800 text-slate-400 border-slate-700',
+      isText: !isAvailable,
     },
     {
       title: 'Composite Risk Index',
-      value: `${riskScore}`,
-      unit: '/ 100',
-      subtitle: riskLevel,
+      value: isAvailable ? `${riskScore}` : 'Waiting for detection',
+      unit: isAvailable ? '/ 100' : '',
+      subtitle: isAvailable ? riskLevel : 'Awaiting sensor data',
       icon: Activity,
-      color: riskLevel === 'CRITICAL' ? 'text-rose-400' : riskLevel === 'HIGH' ? 'text-orange-400' : riskLevel === 'MODERATE' ? 'text-amber-400' : 'text-emerald-400',
-      badge: `LEVEL: ${riskLevel}`,
-      badgeClass: getLevelBadge(riskLevel),
+      color: !isAvailable
+        ? 'text-slate-400'
+        : (riskLevel === 'CRITICAL' ? 'text-rose-400' : riskLevel === 'HIGH' ? 'text-orange-400' : riskLevel === 'MODERATE' ? 'text-amber-400' : 'text-emerald-400'),
+      badge: isAvailable ? `LEVEL: ${riskLevel}` : 'PENDING',
+      badgeClass: isAvailable ? getLevelBadge(riskLevel) : 'bg-slate-800 text-slate-400 border-slate-700',
+      isText: !isAvailable,
     },
     {
       title: 'Capacity Load',
-      value: `${occupancyPct}`,
-      unit: '%',
-      subtitle: 'Calibrated venue floor',
+      value: isAvailable ? `${occupancyPct}` : 'Waiting for detection',
+      unit: isAvailable ? '%' : '',
+      subtitle: isAvailable ? 'Calibrated venue floor' : 'Awaiting sensor data',
       icon: BarChart3,
       color: 'text-indigo-400',
-      badge: `${personCount} / 120 MAX`,
-      badgeClass: 'bg-indigo-950 text-indigo-400 border-indigo-800',
+      badge: isAvailable ? `${personCount} / 120 MAX` : 'STANDBY',
+      badgeClass: isAvailable ? 'bg-indigo-950 text-indigo-400 border-indigo-800' : 'bg-slate-800 text-slate-400 border-slate-700',
+      isText: !isAvailable,
     },
     {
       title: 'Active Alerts',
@@ -74,6 +87,7 @@ export default function MetricsRow({ dashboardData }) {
       color: activeAlerts > 0 ? 'text-rose-400' : 'text-slate-400',
       badge: activeAlerts > 0 ? 'ATTENTION' : 'NOMINAL',
       badgeClass: activeAlerts > 0 ? 'bg-rose-950 text-rose-400 border-rose-800 animate-pulse' : 'bg-slate-800 text-slate-300 border-slate-700',
+      isText: false,
     },
   ];
 
@@ -97,10 +111,14 @@ export default function MetricsRow({ dashboardData }) {
 
             <div className="space-y-1">
               <div className="flex items-baseline gap-1.5">
-                <span className="text-2xl font-bold tracking-tight text-white font-mono">
+                <span
+                  className={`font-bold tracking-tight text-white font-mono ${
+                    c.isText ? 'text-xs text-slate-400 font-normal italic' : 'text-2xl'
+                  }`}
+                >
                   {c.value}
                 </span>
-                <span className="text-xs text-slate-400 font-medium">{c.unit}</span>
+                {c.unit && <span className="text-xs text-slate-400 font-medium">{c.unit}</span>}
               </div>
               <p className="text-xs text-slate-400 m-0 truncate">{c.subtitle}</p>
             </div>

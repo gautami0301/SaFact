@@ -20,6 +20,8 @@ def get_live_detections():
 
     return {
         "timestamp": time.time(),
+        "has_processed_frame": stats["has_processed_frame"],
+        "camera_connected": stats["camera_connected"],
         "person_count": stats["person_count"],
         "confidence_avg": avg_conf,
         "inference_time_ms": stats["inference_time_ms"],
@@ -38,6 +40,7 @@ def get_dashboard_summary():
     
     return {
         "timestamp": time.time(),
+        "has_processed_frame": stats["has_processed_frame"],
         "camera_connected": stats["camera_connected"],
         "camera_source": stats["camera_source"],
         "person_count": stats["person_count"],
@@ -50,3 +53,4 @@ def get_dashboard_summary():
         "recent_incidents": active_incidents[:5],
         "risk_history": risk_history
     }
+

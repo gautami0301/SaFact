@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🛡️ SaFact — Smart AI for Crowd Flow and Threat Detection
 
 > *Real-time crowd intelligence, optical YOLO person detection, bottleneck mitigation, and autonomous pedestrian flow guidance.*
@@ -133,3 +134,6 @@ SaFact/
   - **LOS E (1.8 – 2.5 p/m²)**: Severe bottleneck, crowd balancing required.
   - **LOS F (> 2.5 p/m²)**: Compression and stampede hazard, urgent intervention.
 - **Privacy Assurance**: Processed locally on-device. Identifiable facial data is never retained or stored to disk.
+=======
+# SaFact
+>>>>>>> 3031b33bf4354883255f666ecd53a457e9194b7f

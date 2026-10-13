@@ -1,0 +1,17 @@
+# Environments & Dependencies
+.venv/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+
+# Database & Runtime
+backend/safact.db
+*.log
+legacy_backup/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

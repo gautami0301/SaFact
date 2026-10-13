@@ -1,0 +1,4 @@
+zone_id,zone_name,location_label,capacity,people_count,area_sqm,density_ppm2,occupancy_pct,risk_level,status,movement_trend
+ZONE_A,Zone A,North Concourse,120,42,60,0.70,35,SAFE,Safe,Stable
+ZONE_B,Zone B,Central Platform,100,78,45,1.73,78,MODERATE,Moderate,Increasing
+ZONE_C,Zone C,Exit Corridor C,110,112,35,3.20,102,CRITICAL,Critical,Congested

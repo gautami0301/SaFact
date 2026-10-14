@@ -37,44 +37,62 @@ class Settings:
     DENSITY_LOS_HIGH: float = 2.5     # LOS E: Severe bottleneck
     DENSITY_LOS_CRITICAL: float = 3.5 # LOS F: Stampede / crush hazard
     
+    # Prototype Classification Thresholds (sq ft per person)
+    SQFT_PER_PERSON_HIGH: float = 5.0        # Under 5 sq ft/person: High density
+    SQFT_PER_PERSON_MODERATE: float = 10.0   # 5-10 sq ft/person: Moderate density
+    # Over 10 sq ft/person: Lower density
+
     # Initial Spatial Monitoring Zones (normalized coordinates 0.0 to 1.0)
     DEFAULT_ZONES = [
         {
             "id": "ZONE_A",
-            "name": "North Concourse",
-            "code": "SEC-A",
+            "name": "Zone A (Red)",
+            "code": "ZONE-A",
             "x1": 0.0, "y1": 0.0, "x2": 0.5, "y2": 0.5,
             "area_sqm": 20.0,
+            "area_sqft": 215.0,
             "max_capacity": 45,
-            "color": "#38bdf8"
+            "color": "#ef4444",
+            "is_count_only": False,
+            "description": "High estimated density / hotspot observation partition"
         },
         {
             "id": "ZONE_B",
-            "name": "Central Platform",
-            "code": "SEC-B",
+            "name": "Zone B (Yellow)",
+            "code": "ZONE-B",
             "x1": 0.5, "y1": 0.0, "x2": 1.0, "y2": 0.5,
             "area_sqm": 18.0,
+            "area_sqft": 194.0,
             "max_capacity": 40,
-            "color": "#818cf8"
+            "color": "#eab308",
+            "is_count_only": False,
+            "description": "Moderate estimated density transit concourse"
         },
         {
             "id": "ZONE_C",
-            "name": "West Turnstiles",
-            "code": "SEC-C",
+            "name": "Zone C (Green)",
+            "code": "ZONE-C",
             "x1": 0.0, "y1": 0.5, "x2": 0.5, "y2": 1.0,
-            "area_sqm": 10.0,
-            "max_capacity": 25,
-            "color": "#f87171"
+            "area_sqm": 25.0,
+            "area_sqft": 269.0,
+            "max_capacity": 50,
+            "color": "#22c55e",
+            "is_count_only": False,
+            "description": "Lower estimated density bypass passage"
         },
         {
             "id": "ZONE_D",
-            "name": "East Egress Corridor",
-            "code": "SEC-D",
+            "name": "Zone D (Slate Grey)",
+            "code": "ZONE-D",
             "x1": 0.5, "y1": 0.5, "x2": 1.0, "y2": 1.0,
             "area_sqm": 15.0,
+            "area_sqft": 161.0,
             "max_capacity": 35,
-            "color": "#34d399"
+            "color": "#64748b",
+            "is_count_only": True,
+            "description": "Perimeter observation sector (people-count only by default)"
         }
     ]
 
 settings = Settings()
+

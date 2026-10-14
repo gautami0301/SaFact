@@ -103,4 +103,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(alert),
     }),
+
+  // AI Assistant Integration
+  askAssistant: (message, history = []) =>
+    request('/api/assistant/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message, history }),
+    }),
+
+  // Contact & Customer Care
+  submitContact: (data) =>
+    request('/api/contact', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 };
+

@@ -27,6 +27,9 @@ from app.api.risk import router as risk_router
 from app.api.zones import router as zones_router
 from app.api.alerts import router as alerts_router
 from app.api.recommendations import router as recommendations_router
+from app.api.assistant import router as assistant_router
+from app.api.contact import router as contact_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -66,6 +69,9 @@ app.include_router(risk_router)
 app.include_router(zones_router)
 app.include_router(alerts_router)
 app.include_router(recommendations_router)
+app.include_router(assistant_router)
+app.include_router(contact_router)
+
 
 @app.get("/", response_class=HTMLResponse)
 def root():

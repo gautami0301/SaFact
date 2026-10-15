@@ -71,11 +71,16 @@ async def process_frame(request: Request):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Frame decode failure: {str(e)}")
 
-    if frame is None or frame.size == 0:
+    if frame is None or getattr(frame, 'size', 0) == 0:
         raise HTTPException(status_code=400, detail="Unable to decode image frame.")
 
-    result = camera_service.process_browser_frame(frame)
-    return result
+    try:
+        result = camera_service.process_browser_frame(frame)
+        return result
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Frame processing error: {str(e)}")
 
 @router.get("/api/camera/status")
 def get_camera_status():

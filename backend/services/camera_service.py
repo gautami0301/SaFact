@@ -275,6 +275,21 @@ class CameraService:
         Executes YOLOv8n detection, evaluates spatial zones, updates crowd risk,
         and refreshes the real-time telemetry cache.
         """
+        if frame is None or getattr(frame, 'size', 0) == 0:
+            return {
+                "timestamp": time.time(),
+                "has_processed_frame": self.has_processed_frame,
+                "camera_connected": self.camera_connected,
+                "person_count": self.latest_person_count or 0,
+                "confidence_avg": 0.0,
+                "inference_time_ms": 0.0,
+                "fps": self.fps,
+                "detections": self.latest_detections,
+                "zones": self.latest_zone_metrics,
+                "risk": self.latest_risk_assessment,
+                "recommendations": self.latest_recommendations
+            }
+
         now = time.time()
         with self.lock:
             # Measure actual processing/upload FPS

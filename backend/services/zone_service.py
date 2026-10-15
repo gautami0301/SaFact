@@ -90,19 +90,25 @@ class ZoneService:
                 rec_action = "Perimeter counting partition: observation active without risk classification."
                 explanation = "Zone D is configured for occupant count tracking only by default."
             else:
+                high_sqft = getattr(settings, "SQFT_PER_PERSON_HIGH", 5.0)
+                mod_sqft = getattr(settings, "SQFT_PER_PERSON_MODERATE", 10.0)
+                los_high = getattr(settings, "DENSITY_LOS_HIGH", 2.5)
+                los_critical = getattr(settings, "DENSITY_LOS_CRITICAL", 3.5)
+                los_moderate = getattr(settings, "DENSITY_LOS_MODERATE", 1.8)
+
                 if count == 0:
                     density_category = "Zero Occupants (Free Flow)"
                     risk_level = "LOW"
                     risk_score = 5.0
                     rec_action = "Clear corridor. Ample capacity available."
                     explanation = f"No individuals detected in this {area_sqft} sq ft sector."
-                elif sqft_per_person < settings.SQFT_PER_PERSON_HIGH or density >= settings.DENSITY_LOS_HIGH:
+                elif (sqft_per_person is not None and sqft_per_person < high_sqft) or density >= los_high:
                     density_category = "High Density"
-                    risk_level = "HIGH" if density < settings.DENSITY_LOS_CRITICAL else "CRITICAL"
+                    risk_level = "HIGH" if density < los_critical else "CRITICAL"
                     risk_score = 82.0 if risk_level == "HIGH" else 94.0
                     rec_action = "High localized crowding. Encourage flow toward adjacent lower-density corridors."
                     explanation = f"Space per person ({sqft_per_person} sq ft/p) is below safe threshold (< 5 sq ft)."
-                elif sqft_per_person <= settings.SQFT_PER_PERSON_MODERATE or density >= settings.DENSITY_LOS_MODERATE:
+                elif (sqft_per_person is not None and sqft_per_person <= mod_sqft) or density >= los_moderate:
                     density_category = "Moderate Density"
                     risk_level = "MODERATE"
                     risk_score = 52.0
@@ -127,6 +133,7 @@ class ZoneService:
                 "sqft_per_person": sqft_per_person,
                 "people_per_sqft": people_per_sqft,
                 "density_category": density_category,
+                "density": density,
                 "density_ppm2": density,
                 "risk_level": risk_level,
                 "risk_score": risk_score,
